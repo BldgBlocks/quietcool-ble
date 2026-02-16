@@ -1,5 +1,5 @@
 {
-  "name": "node-red-contrib-quietcool",
+  "name": "@bldgblocks/node-red-contrib-quietcool",
   "version": "0.1.0",
   "description": "Node-RED nodes for controlling QuietCool whole house fans over BLE",
   "keywords": [
@@ -16,7 +16,10 @@
   "author": "BldgBlocks",
   "repository": {
     "type": "git",
-    "url": "https://github.com/BldgBlocks/node-red-contrib-quietcool"
+    "url": "git+https://github.com/BldgBlocks/node-red-contrib-quietcool.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=18.0.0"
