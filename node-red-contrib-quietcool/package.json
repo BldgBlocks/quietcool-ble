@@ -30,7 +30,8 @@
     }
   },
   "scripts": {
-    "postinstall": "bash python/setup_venv.sh"
+    "postinstall": "bash python/setup_venv.sh",
+    "preuninstall": "pkill -f 'python.*bridge\\.py' 2>/dev/null; rm -rf python/.venv 2>/dev/null; echo 'QuietCool BLE: Cleaned up.'; true"
   },
   "files": [
     "nodes/",
