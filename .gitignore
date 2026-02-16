@@ -1,0 +1,9 @@
+captures/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+node_modules/

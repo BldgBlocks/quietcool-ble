@@ -1,0 +1,43 @@
+{
+  "name": "node-red-contrib-quietcool",
+  "version": "0.1.0",
+  "description": "Node-RED nodes for controlling QuietCool whole house fans over BLE",
+  "keywords": [
+    "node-red",
+    "quietcool",
+    "ble",
+    "bluetooth",
+    "fan",
+    "hvac",
+    "whole-house-fan",
+    "home-automation"
+  ],
+  "license": "MIT",
+  "author": "BldgBlocks",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BldgBlocks/node-red-contrib-quietcool"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "node-red": {
+    "version": ">=3.0.0",
+    "nodes": {
+      "quietcool-config": "nodes/quietcool-config.js",
+      "quietcool-control": "nodes/quietcool-control.js",
+      "quietcool-sensor": "nodes/quietcool-sensor.js"
+    }
+  },
+  "scripts": {
+    "postinstall": "bash python/setup_venv.sh"
+  },
+  "files": [
+    "nodes/",
+    "python/bridge.py",
+    "python/requirements.txt",
+    "python/setup_venv.sh",
+    "README.md",
+    "LICENSE"
+  ]
+}

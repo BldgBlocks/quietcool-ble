@@ -1,0 +1,106 @@
+<script type="text/html" data-template-name="quietcool-control">
+    <div class="form-row">
+        <label for="node-input-fan"><i class="fa fa-bluetooth"></i> Fan</label>
+        <input type="text" id="node-input-fan">
+    </div>
+    <div class="form-row">
+        <label for="node-input-action"><i class="fa fa-cog"></i> Action</label>
+        <select id="node-input-action" style="width:70%;">
+            <option value="off">Turn Off</option>
+            <option value="smart">Smart Mode (TH)</option>
+            <option value="run_high">Run High</option>
+            <option value="run_low">Run Low</option>
+            <option value="timer">Timer</option>
+            <option value="preset">Apply Preset</option>
+            <option value="set_mode">Set Mode (custom)</option>
+            <option value="set_speed">Set Speed (custom)</option>
+            <option value="set_thresholds">Set Thresholds</option>
+            <option value="raw">Raw API Command</option>
+        </select>
+    </div>
+    <div class="form-row" id="action-value-row">
+        <label for="node-input-actionValue"><i class="fa fa-pencil"></i> Value</label>
+        <input type="text" id="node-input-actionValue" placeholder="e.g., Winter, HIGH, TH">
+    </div>
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="quietcool-control">
+    <p>Controls a QuietCool whole house fan over BLE.</p>
+
+    <h3>Actions</h3>
+    <ul>
+        <li><b>Turn Off</b> — Sets fan to Idle mode</li>
+        <li><b>Smart Mode (TH)</b> — Temperature/humidity auto mode</li>
+        <li><b>Run High</b> — Continuous run at high speed</li>
+        <li><b>Run Low</b> — Continuous run at low speed</li>
+        <li><b>Timer</b> — Run for a duration. Set <code>msg.payload.hours</code>,
+            <code>msg.payload.minutes</code>, <code>msg.payload.speed</code></li>
+        <li><b>Apply Preset</b> — Apply a named profile (Summer, Winter, etc.).
+            Set preset name in Value or <code>msg.payload.name</code></li>
+        <li><b>Set Mode</b> — Custom mode: Idle, Timer, TH</li>
+        <li><b>Set Speed</b> — Custom speed: LOW, HIGH</li>
+        <li><b>Set Thresholds</b> — Set temp/humidity thresholds via <code>msg.payload.args</code></li>
+        <li><b>Raw</b> — Send raw JSON API command</li>
+    </ul>
+
+    <h3>Input</h3>
+    <p>Trigger with any <code>msg</code>. Override action via <code>msg.payload</code>:</p>
+    <pre>msg.payload = {
+    action: "preset",
+    args: { name: "Summer" }
+}</pre>
+
+    <h3>Output</h3>
+    <p><code>msg.payload</code> contains the fan's JSON response.</p>
+</script>
+
+<script type="text/javascript">
+    RED.nodes.registerType("quietcool-control", {
+        category: "QuietCool",
+        defaults: {
+            name: { value: "" },
+            fan: { value: "", type: "quietcool-config", required: true },
+            action: { value: "off" },
+            actionValue: { value: "" },
+        },
+        color: "#4DB6AC",
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-fan",
+        paletteLabel: "fan control",
+        label: function () {
+            if (this.name) return this.name;
+            var labels = {
+                off: "Fan Off",
+                smart: "Smart Mode",
+                run_high: "Run High",
+                run_low: "Run Low",
+                timer: "Timer",
+                preset: "Preset" + (this.actionValue ? ": " + this.actionValue : ""),
+                set_mode: "Mode",
+                set_speed: "Speed",
+                set_thresholds: "Thresholds",
+                raw: "Raw",
+            };
+            return labels[this.action] || "Fan Control";
+        },
+        oneditprepare: function () {
+            var actionSelect = $("#node-input-action");
+            var valueRow = $("#action-value-row");
+            function toggleValue() {
+                var action = actionSelect.val();
+                if (["preset", "set_mode", "set_speed"].indexOf(action) >= 0) {
+                    valueRow.show();
+                } else {
+                    valueRow.hide();
+                }
+            }
+            actionSelect.on("change", toggleValue);
+            toggleValue();
+        },
+    });
+</script>

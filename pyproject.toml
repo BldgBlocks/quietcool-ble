@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quietcool-ble"
+version = "0.1.0"
+description = "BLE reverse engineering toolkit for QuietCool AFG SMT ES-3.0 whole house fans"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "bleak>=0.21.0",
+]
+
+[project.scripts]
+quietcool-ble = "quietcool_ble.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["quietcool_ble*"]

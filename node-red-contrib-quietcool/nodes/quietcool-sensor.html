@@ -1,0 +1,85 @@
+<script type="text/html" data-template-name="quietcool-sensor">
+    <div class="form-row">
+        <label for="node-input-fan"><i class="fa fa-bluetooth"></i> Fan</label>
+        <input type="text" id="node-input-fan">
+    </div>
+    <div class="form-row">
+        <label for="node-input-query"><i class="fa fa-search"></i> Query</label>
+        <select id="node-input-query" style="width:70%;">
+            <option value="get_state">State (temp, humidity, mode, speed)</option>
+            <option value="get_status">Full Status</option>
+            <option value="get_info">Fan Info</option>
+            <option value="get_version">Firmware Version</option>
+            <option value="get_params">Parameters</option>
+            <option value="get_presets">Presets</option>
+            <option value="get_remain">Timer Remaining</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-pollInterval"><i class="fa fa-clock-o"></i> Poll (sec)</label>
+        <input type="number" id="node-input-pollInterval" min="0" step="1" placeholder="0 = on input only" style="width:100px;">
+    </div>
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="quietcool-sensor">
+    <p>Reads sensor data and status from a QuietCool whole house fan.</p>
+
+    <h3>Queries</h3>
+    <ul>
+        <li><b>State</b> — Current mode, speed, temperature (&deg;F), humidity (%)</li>
+        <li><b>Full Status</b> — Complete status including fan info, firmware, presets, thresholds</li>
+        <li><b>Fan Info</b> — Name, model, serial number</li>
+        <li><b>Firmware Version</b> — Firmware and hardware version</li>
+        <li><b>Parameters</b> — Current temp/humidity thresholds and timer settings</li>
+        <li><b>Presets</b> — List of preset profiles (Summer, Winter, etc.)</li>
+        <li><b>Timer Remaining</b> — Hours, minutes, seconds remaining on timer</li>
+    </ul>
+
+    <h3>Output</h3>
+    <p><code>msg.payload</code> — Full response object from the fan</p>
+    <p>For <b>State</b> and <b>Full Status</b> queries, convenience fields are added:</p>
+    <ul>
+        <li><code>msg.temperature</code> — Temperature in &deg;F</li>
+        <li><code>msg.humidity</code> — Humidity %</li>
+        <li><code>msg.mode</code> — Current mode (Idle, Timer, TH)</li>
+        <li><code>msg.range</code> — Current speed (LOW, MEDIUM, HIGH, CLOSE)</li>
+    </ul>
+
+    <h3>Polling</h3>
+    <p>Set <b>Poll</b> to a number of seconds to auto-query at that interval.
+    Set to 0 to only query on input.</p>
+</script>
+
+<script type="text/javascript">
+    RED.nodes.registerType("quietcool-sensor", {
+        category: "QuietCool",
+        defaults: {
+            name: { value: "" },
+            fan: { value: "", type: "quietcool-config", required: true },
+            query: { value: "get_state" },
+            pollInterval: { value: 0 },
+        },
+        color: "#80CBC4",
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-thermometer-half",
+        paletteLabel: "fan sensor",
+        label: function () {
+            if (this.name) return this.name;
+            var labels = {
+                get_state: "Fan State",
+                get_status: "Full Status",
+                get_info: "Fan Info",
+                get_version: "Firmware",
+                get_params: "Parameters",
+                get_presets: "Presets",
+                get_remain: "Timer Left",
+            };
+            return labels[this.query] || "Fan Sensor";
+        },
+    });
+</script>

@@ -1,0 +1,144 @@
+<script type="text/html" data-template-name="quietcool-config">
+    <div class="form-row">
+        <label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-config-input-name" placeholder="My Fan">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-address"><i class="fa fa-bluetooth"></i> BLE Address</label>
+        <div style="display:flex; gap:4px;">
+            <input type="text" id="node-config-input-address" placeholder="XX:XX:XX:XX:XX:XX" style="flex:1;">
+            <button type="button" id="quietcool-scan-btn" class="red-ui-button" title="Scan for fans"><i class="fa fa-search"></i> Scan</button>
+        </div>
+    </div>
+    <div id="quietcool-scan-results" style="display:none; margin-bottom:10px;">
+        <label>&nbsp;</label>
+        <select id="quietcool-fan-select" style="width:70%;"></select>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-phoneId"><i class="fa fa-key"></i> Phone ID</label>
+        <div style="display:flex; gap:4px;">
+            <input type="text" id="node-config-input-phoneId" placeholder="16-char hex string">
+            <button type="button" id="quietcool-genid-btn" class="red-ui-button" title="Generate random ID"><i class="fa fa-random"></i> New</button>
+        </div>
+    </div>
+    <div class="form-row">
+        <label>&nbsp;</label>
+        <button type="button" id="quietcool-pair-btn" class="red-ui-button" style="width:auto;">
+            <i class="fa fa-link"></i> Pair with Fan
+        </button>
+        <span id="quietcool-pair-status" style="margin-left:8px;"></span>
+    </div>
+    <div class="form-row">
+        <label>&nbsp;</label>
+        <input type="checkbox" id="node-config-input-autoConnect" style="width:auto; vertical-align:top;">
+        <label for="node-config-input-autoConnect" style="width:auto;"> Auto-connect on deploy</label>
+    </div>
+    <div class="form-tips">
+        <p><b>Quick Setup:</b></p>
+        <ol>
+            <li>Click <b>Scan</b> to find your fan and select it</li>
+            <li>Click <b>New</b> to generate a Phone ID</li>
+            <li>Put the fan in pairing mode: hold the <b>Pair</b> button on the controller for ~5 seconds until the LED blinks</li>
+            <li>Click <b>Pair with Fan</b></li>
+            <li>Save the config — you're done!</li>
+        </ol>
+        <p><b>Already paired from the app?</b> You can extract the Phone ID from
+        a Bluetooth HCI snoop log instead. See the README for details.</p>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="quietcool-config">
+    <p>Configuration for a QuietCool whole house fan BLE connection.</p>
+    <p>Each fan needs its own config node with the BLE MAC address and Phone ID.</p>
+    <p>The config node manages a Python bridge process that maintains the BLE
+    connection to the fan. It starts automatically when nodes using this config
+    are deployed, and stops when they are removed.</p>
+</script>
+
+<script type="text/javascript">
+    RED.nodes.registerType("quietcool-config", {
+        category: "config",
+        defaults: {
+            name: { value: "" },
+            address: { value: "", required: true },
+            phoneId: { value: "", required: true },
+            autoConnect: { value: true },
+        },
+        label: function () {
+            return this.name || this.address || "QuietCool Fan";
+        },
+        oneditprepare: function () {
+            // Scan button
+            $("#quietcool-scan-btn").on("click", function () {
+                var btn = $(this);
+                btn.prop("disabled", true).find("i").removeClass("fa-search").addClass("fa-spinner fa-spin");
+                $.getJSON("quietcool/scan", function (data) {
+                    btn.prop("disabled", false).find("i").removeClass("fa-spinner fa-spin").addClass("fa-search");
+                    if (data.fans && data.fans.length > 0) {
+                        var select = $("#quietcool-fan-select").empty();
+                        data.fans.forEach(function (f) {
+                            select.append($("<option>").val(f.address).text(f.name + " (" + f.address + ") RSSI: " + f.rssi));
+                        });
+                        $("#quietcool-scan-results").show();
+                        select.off("change").on("change", function () {
+                            $("#node-config-input-address").val($(this).val());
+                        });
+                        $("#node-config-input-address").val(data.fans[0].address);
+                    } else {
+                        RED.notify("No QuietCool fans found. Make sure Bluetooth is on and the fan is powered.", "warning");
+                    }
+                }).fail(function () {
+                    btn.prop("disabled", false).find("i").removeClass("fa-spinner fa-spin").addClass("fa-search");
+                    RED.notify("Scan failed. Check that Bluetooth is enabled.", "error");
+                });
+            });
+
+            // Generate ID button
+            $("#quietcool-genid-btn").on("click", function () {
+                $.getJSON("quietcool/generate-id", function (data) {
+                    if (data.phone_id) {
+                        $("#node-config-input-phoneId").val(data.phone_id);
+                    }
+                });
+            });
+
+            // Pair button
+            $("#quietcool-pair-btn").on("click", function () {
+                var address = $("#node-config-input-address").val();
+                var phoneId = $("#node-config-input-phoneId").val();
+                if (!address || !phoneId) {
+                    RED.notify("Fill in BLE Address and Phone ID first.", "warning");
+                    return;
+                }
+                var btn = $(this);
+                var status = $("#quietcool-pair-status");
+                btn.prop("disabled", true);
+                status.text("Connecting...").css("color", "#666");
+
+                $.ajax({
+                    url: "quietcool/pair",
+                    type: "POST",
+                    contentType: "application/json",
+                    data: JSON.stringify({ address: address, phoneId: phoneId }),
+                    success: function (data) {
+                        btn.prop("disabled", false);
+                        if (data.paired) {
+                            status.text("\u2713 " + (data.message || "Paired!")).css("color", "green");
+                            if (data.phone_id) {
+                                $("#node-config-input-phoneId").val(data.phone_id);
+                            }
+                        } else {
+                            status.text("\u2717 " + (data.message || data.error || "Failed")).css("color", "red");
+                        }
+                    },
+                    error: function (xhr) {
+                        btn.prop("disabled", false);
+                        var msg = "Pair failed";
+                        try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+                        status.text("\u2717 " + msg).css("color", "red");
+                    },
+                });
+            });
+        },
+    });
+</script>
