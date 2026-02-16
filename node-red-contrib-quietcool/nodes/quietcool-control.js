@@ -62,6 +62,10 @@ module.exports = function (RED) {
                     args = { speed: "HIGH" };
                     action = "set_speed";
                     break;
+                case "run_medium":
+                    args = { speed: "MEDIUM" };
+                    action = "set_speed";
+                    break;
                 case "run_low":
                     args = { speed: "LOW" };
                     action = "set_speed";

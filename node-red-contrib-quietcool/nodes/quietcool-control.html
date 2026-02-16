@@ -9,6 +9,7 @@
             <option value="off">Turn Off</option>
             <option value="smart">Smart Mode (TH)</option>
             <option value="run_high">Run High</option>
+            <option value="run_medium">Run Medium</option>
             <option value="run_low">Run Low</option>
             <option value="timer">Timer</option>
             <option value="preset">Apply Preset</option>
@@ -36,6 +37,7 @@
         <li><b>Turn Off</b> — Sets fan to Idle mode</li>
         <li><b>Smart Mode (TH)</b> — Temperature/humidity auto mode</li>
         <li><b>Run High</b> — Continuous run at high speed</li>
+        <li><b>Run Medium</b> — Continuous run at medium speed (3-speed fans)</li>
         <li><b>Run Low</b> — Continuous run at low speed</li>
         <li><b>Timer</b> — Run for a duration. Set <code>msg.payload.hours</code>,
             <code>msg.payload.minutes</code>, <code>msg.payload.speed</code></li>
@@ -78,6 +80,7 @@
                 off: "Fan Off",
                 smart: "Smart Mode",
                 run_high: "Run High",
+                run_medium: "Run Medium",
                 run_low: "Run Low",
                 timer: "Timer",
                 preset: "Preset" + (this.actionValue ? ": " + this.actionValue : ""),

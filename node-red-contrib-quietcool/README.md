@@ -68,6 +68,7 @@ Send commands to the fan. Available actions:
 | Turn Off | Sets fan to Idle mode |
 | Smart Mode (TH) | Temperature/humidity auto mode |
 | Run High | Continuous run at high speed |
+| Run Medium | Continuous run at medium speed (3-speed fans) |
 | Run Low | Continuous run at low speed |
 | Timer | Run for a set duration |
 | Apply Preset | Apply a named profile (Summer, Winter, etc.) |

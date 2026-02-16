@@ -1,6 +1,6 @@
 {
   "name": "@bldgblocks/node-red-contrib-quietcool",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Node-RED nodes for controlling QuietCool whole house fans over BLE",
   "keywords": [
     "node-red",
