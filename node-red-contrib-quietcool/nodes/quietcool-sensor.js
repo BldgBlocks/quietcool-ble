@@ -1,5 +1,12 @@
 /**
  * QuietCool BLE sensor node — read sensor data from the fan.
+ *
+ * Two query modes:
+ *   "get_state"  → msg.state  (mode, range, temperature, humidity)
+ *   "get_status" → msg.state + msg.info + msg.version + msg.params
+ *                   + msg.presets + msg.timer (if in Timer mode)
+ *
+ * No polling — wire an inject node to trigger reads as needed.
  */
 
 module.exports = function (RED) {
@@ -9,8 +16,6 @@ module.exports = function (RED) {
 
         node.configNodeId = config.fan;
         node.query = config.query || "get_state";
-        node.pollInterval = (parseInt(config.pollInterval) || 0) * 1000;
-        node.pollTimer = null;
 
         const fanConfig = RED.nodes.getNode(node.configNodeId);
         if (!fanConfig) {
@@ -28,8 +33,20 @@ module.exports = function (RED) {
 
         fanConfig.registerUser(node);
 
+        /**
+         * Build msg.state from a get_state response.
+         */
+        function buildState(data) {
+            return {
+                mode: data.Mode,
+                range: data.Range,
+                temperature: data.temperature_f || (data.Temp_Sample || 0) / 10.0,
+                humidity: data.humidity_pct || data.Humidity_Sample || 0,
+                sensorState: data.SensorState,
+            };
+        }
+
         function doQuery(msg) {
-            msg = msg || { payload: {} };
             const query = node.query;
 
             node.status({ fill: "blue", shape: "dot", text: query });
@@ -37,21 +54,44 @@ module.exports = function (RED) {
             fanConfig.sendBridgeCommand(query, {}, function (response) {
                 if (response.ok) {
                     const data = response.data || {};
-                    msg.payload = data;
 
-                    // Add convenience fields for common queries
                     if (query === "get_state") {
-                        msg.temperature =
-                            data.temperature_f || (data.Temp_Sample || 0) / 10.0;
-                        msg.humidity =
-                            data.humidity_pct || data.Humidity_Sample || 0;
-                        msg.mode = data.Mode;
-                        msg.range = data.Range;
+                        msg.topic = "state";
+                        msg.state = buildState(data);
                     } else if (query === "get_status") {
-                        msg.temperature = data.temperature_f;
-                        msg.humidity = data.humidity;
-                        msg.mode = data.mode;
-                        msg.range = data.range;
+                        msg.topic = "full";
+                        msg.state = {
+                            mode: data.mode === "TH" ? "Smart" : data.mode,
+                            range: data.range,
+                            temperature: data.temperature_f,
+                            humidity: data.humidity,
+                            sensorState: data.sensor_state,
+                        };
+                        msg.info = {
+                            name: data.name,
+                            model: data.model,
+                            serial: data.serial,
+                            connected: data.connected,
+                        };
+                        msg.version = {
+                            firmware: data.firmware,
+                            hardware: data.hw_version,
+                        };
+                        msg.params = {
+                            fanType: data.fan_type,
+                            thresholds: data.active_thresholds,
+                        };
+                        msg.presets = {
+                            list: data.presets || [],
+                            active: data.active_preset || null,
+                        };
+                        if (data.remain_hours != null) {
+                            msg.timer = {
+                                hours: data.remain_hours,
+                                minutes: data.remain_minutes,
+                                seconds: data.remain_seconds,
+                            };
+                        }
                     }
 
                     node.updateNodeStatus(fanConfig.connected);
@@ -67,31 +107,11 @@ module.exports = function (RED) {
             });
         }
 
-        // Input-triggered query
         node.on("input", function (msg) {
             doQuery(msg);
         });
 
-        // Optional polling
-        if (node.pollInterval > 0) {
-            const startPolling = () => {
-                if (fanConfig.connected) {
-                    node.pollTimer = setInterval(
-                        () => doQuery(),
-                        node.pollInterval
-                    );
-                } else {
-                    setTimeout(startPolling, 5000);
-                }
-            };
-            setTimeout(startPolling, 3000);
-        }
-
         node.on("close", function (done) {
-            if (node.pollTimer) {
-                clearInterval(node.pollTimer);
-                node.pollTimer = null;
-            }
             fanConfig.deregisterUser(node);
             done();
         });

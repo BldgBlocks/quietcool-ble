@@ -134,3 +134,51 @@ Tested with firmware `IT-BLT-ATTICFAN_V2.6`.
 ## License
 
 MIT
+
+### Troubleshooting BLE Bridge Issues
+
+If the QuietCool BLE bridge fails to scan or connect, follow these steps:
+
+1. **Check Python Environment**:
+   - Ensure the Python virtual environment is set up correctly.
+   - Navigate to the bridge directory and recreate the environment:
+     ```bash
+     cd /home/pi/@buildingblocks/quietcool-ble/node-red-contrib-quietcool/python
+     python3 -m venv .venv
+     source .venv/bin/activate
+     pip install bleak
+     ```
+
+2. **Make the Script Executable**:
+   - If the script fails with a "Permission denied" error, make it executable:
+     ```bash
+     chmod +x bridge.py
+     ```
+
+3. **Run the Script with Elevated Permissions**:
+   - Use `sudo` to run the script:
+     ```bash
+     sudo ./bridge.py scan
+     ```
+
+4. **Verify Dependencies**:
+   - Ensure `bleak` and `dbus-fast` are installed in the virtual environment.
+    ```bash
+    cd /home/pi/@buildingblocks/quietcool-ble/node-red-contrib-quietcool/python
+    source .venv/bin/activate
+    pip install bleak dbus-fast
+    ```
+
+5. **Check Bluetooth Controller**:
+   - Verify the controller is active and discoverable:
+     ```bash
+     rfkill list
+     hciconfig -a
+     bluetoothctl scan on
+     ```
+
+6. **Node-RED Integration**:
+   - Restart Node-RED after resolving issues:
+     ```bash
+     node-red-restart
+     ```

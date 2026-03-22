@@ -39,6 +39,7 @@ import os
 import signal
 import logging
 import secrets
+import subprocess
 from typing import Optional, Dict, Any
 
 # Add parent paths for imports
@@ -48,6 +49,11 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 logger = logging.getLogger("quietcool-bridge")
+logging.basicConfig(
+    filename="/tmp/bridge-debug.log",
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s: %(message)s",
+)
 
 # BLE constants
 SERVICE_UUID = "000000ff-0000-1000-8000-00805f9b34fb"
@@ -74,8 +80,12 @@ class FanBridge:
         return self.client is not None and self.client.is_connected
 
     def _on_disconnect(self, client: BleakClient):
+        was_logged_in = self._logged_in
         self._logged_in = False
-        emit_status(False, self.address, "disconnected")
+        self.client = None
+        # Only emit disconnect status if we were actually logged in (avoids spam during retries)
+        if was_logged_in:
+            emit_status(False, self.address, "disconnected")
 
     def _notification_handler(self, sender: BleakGATTCharacteristic, data: bytearray):
         self._response_buffer.extend(data)
@@ -91,35 +101,103 @@ class FanBridge:
         except UnicodeDecodeError:
             pass
 
-    async def connect(self) -> Dict:
+    async def _cleanup_stale_connection(self):
+        """Force-cleanup any stale BLE client before reconnecting."""
+        if self.client is not None:
+            try:
+                if self.client.is_connected:
+                    await self.client.disconnect()
+            except Exception:
+                pass
+            self.client = None
+            self._logged_in = False
+        # Remove device from BlueZ to clear any InProgress state
+        # NOTE: Removing devices forces service rediscovery which is bad for weak signals.
+        # So we disable this aggressive cleanup unless absolutely necessary.
+        # try:
+        #     subprocess.run(
+        #         ["bluetoothctl", "remove", self.address],
+        #         capture_output=True, timeout=5
+        #     )
+        # except Exception:
+        #     pass
+        await asyncio.sleep(2)
+
+    async def connect(self, max_retries: int = 3) -> Dict:
         if self.is_connected:
             return {"already_connected": True}
 
-        self.client = BleakClient(
-            self.address,
-            timeout=15.0,
-            disconnected_callback=self._on_disconnect,
-        )
-        await self.client.connect()
+        # Don't clean up immediately on the first try unless necessary; 
+        # but since we are here, we probably aren't connected.
+        # However, aggressive removal might be why we fail if we don't scan back.
+        
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Connect attempt {attempt}/{max_retries} to {self.address}")
+                
+                # Attempt to find the device more aggressively if needed
+                device = None
+                try:
+                    logger.debug("Scanning for device (detection mode)...")
+                    # Short scan to prime the cache
+                    device = await BleakScanner.find_device_by_address(self.address, timeout=10.0)
+                    
+                    if not device:
+                         logger.warning(f"Device {self.address} not found during scan.")
+                    else:
+                        logger.debug(f"Device found: {device}")
+                except Exception as scan_err:
+                     logger.warning(f"Scan error: {scan_err}")
 
-        if not self.client.is_connected:
-            raise ConnectionError("Failed to connect")
+                # Use discovered device object if available (skips internal re-scan logic in BleakClient)
+                self.client = BleakClient(
+                    device if device else self.address,
+                    timeout=20.0,
+                    disconnected_callback=self._on_disconnect,
+                )
+                
+                # Small delay to let BlueZ settle
+                await asyncio.sleep(1.0)
+                
+                logger.info(f"Initiating connection to {self.address}...")
+                try:
+                    await self.client.connect()
+                    logger.debug(f"Connect call returned. Connected: {self.client.is_connected}")
+                except Exception as conn_err:
+                    logger.error(f"BleakClient.connect() raised exception: {conn_err}")
+                    raise conn_err
 
-        await self.client.start_notify(CHAR_UUID, self._notification_handler)
+                if not self.is_connected:
+                    raise ConnectionError("Failed to connect (disconnected immediately)")
 
-        response = await self._send("Login", PhoneID=self.phone_id)
-        if not response or response.get("Result") != "Success":
-            await self.client.disconnect()
-            raise ConnectionError(
-                f"Login failed: {response}. Check PhoneID or pair the device."
-            )
+                await self.client.start_notify(CHAR_UUID, self._notification_handler)
 
-        self._logged_in = True
-        emit_status(True, self.address, "connected")
-        return {
-            "connected": True,
-            "pair_state": response.get("PairState"),
-        }
+                # Send Login command
+                response = await self._send("Login", PhoneID=self.phone_id)
+                
+                if not response or response.get("Result") != "Success":
+                    await self.client.disconnect()
+                    raise ConnectionError(
+                        f"Login failed: {response}. Check PhoneID or pair the device."
+                    )
+
+                self._logged_in = True
+                emit_status(True, self.address, "connected")
+                return {
+                    "connected": True,
+                    "pair_state": response.get("PairState"),
+                }
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Connect attempt {attempt} failed: {e}")
+                # cleanup stale connection usually involves 'remove' which nukes the cache
+                # so the next loop MUST scan.
+                await self._cleanup_stale_connection()
+                if attempt < max_retries:
+                    await asyncio.sleep(2 * attempt)  # backoff: 2s, 4s
+
+        raise ConnectionError(f"Failed after {max_retries} attempts: {last_error}")
 
     async def disconnect(self) -> Dict:
         if self.client and self.client.is_connected:
@@ -156,14 +234,18 @@ class FanBridge:
 
     async def reconnect_and_send(self, api: str, timeout: float = 5.0, **kwargs):
         """Send command with auto-reconnect on BLE drop."""
-        try:
-            await self.ensure_connected()
-            return await self._send(api, timeout, **kwargs)
-        except (ConnectionError, Exception) as e:
-            logger.warning(f"Connection lost, reconnecting: {e}")
-            await asyncio.sleep(3)
-            await self.connect()
-            return await self._send(api, timeout, **kwargs)
+        for attempt in range(2):
+            try:
+                await self.ensure_connected()
+                return await self._send(api, timeout, **kwargs)
+            except Exception as e:
+                logger.warning(f"Command '{api}' failed (attempt {attempt+1}): {e}")
+                await self._cleanup_stale_connection()
+                if attempt == 0:
+                    await asyncio.sleep(2)
+                    await self.connect()
+                else:
+                    raise
 
     # ---- High-level commands ----
 
@@ -416,6 +498,12 @@ async def handle_command(line: str):
             if not address or not phone_id:
                 emit(msg_id, False, error="address and phone_id are required")
                 return
+            # Clean up existing connection before creating new one
+            if fan is not None:
+                try:
+                    await fan._cleanup_stale_connection()
+                except Exception:
+                    pass
             fan = FanBridge(address, phone_id)
             result = await fan.connect()
             emit(msg_id, True, result)

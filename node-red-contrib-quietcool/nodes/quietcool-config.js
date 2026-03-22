@@ -36,7 +36,7 @@ module.exports = function (RED) {
                 stdio: ["pipe", "pipe", "pipe"],
                 env: {
                     ...process.env,
-                    QUIETCOOL_LOG_LEVEL: "WARNING",
+                    QUIETCOOL_LOG_LEVEL: "INFO",
                 },
             });
 
@@ -81,7 +81,7 @@ module.exports = function (RED) {
                 input: node.bridge.stderr,
             });
             stderrRl.on("line", (line) => {
-                node.trace(`Bridge: ${line}`);
+                node.warn(`Bridge: ${line}`);
             });
 
             node.bridge.on("exit", (code, signal) => {
@@ -134,13 +134,13 @@ module.exports = function (RED) {
 
             if (callback) {
                 node.pendingCallbacks[id] = callback;
-                // Timeout after 15s
+                // Timeout after 90s (BLE operations including scan/reconnect can be slow)
                 setTimeout(() => {
                     if (node.pendingCallbacks[id]) {
                         delete node.pendingCallbacks[id];
                         callback({ ok: false, error: "Command timeout" });
                     }
-                }, 15000);
+                }, 90000);
             }
 
             node.bridge.stdin.write(msg);
