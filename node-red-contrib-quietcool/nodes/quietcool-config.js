@@ -25,6 +25,46 @@ module.exports = function (RED) {
         node.pendingCallbacks = {};
         node.msgCounter = 0;
         node.users = new Set();
+        node.stderrLines = [];
+        node.stderrFlushTimer = null;
+
+        node.flushBridgeStderr = function (forceError = false) {
+            if (node.stderrFlushTimer) {
+                clearTimeout(node.stderrFlushTimer);
+                node.stderrFlushTimer = null;
+            }
+
+            if (node.stderrLines.length === 0) {
+                return;
+            }
+
+            const message = node.stderrLines.join("\n");
+            node.stderrLines = [];
+
+            if (forceError || /traceback|exception|error:/i.test(message)) {
+                node.error(`Bridge stderr:\n${message}`);
+                return;
+            }
+
+            node.debug(`Bridge stderr:\n${message}`);
+        };
+
+        node.queueBridgeStderr = function (line) {
+            const trimmed = String(line || "").trim();
+            if (!trimmed) {
+                return;
+            }
+
+            node.stderrLines.push(trimmed);
+
+            if (node.stderrFlushTimer) {
+                clearTimeout(node.stderrFlushTimer);
+            }
+
+            node.stderrFlushTimer = setTimeout(() => {
+                node.flushBridgeStderr();
+            }, 250);
+        };
 
         node.startBridge = function () {
             if (node.bridge) return;
@@ -36,7 +76,7 @@ module.exports = function (RED) {
                 stdio: ["pipe", "pipe", "pipe"],
                 env: {
                     ...process.env,
-                    QUIETCOOL_LOG_LEVEL: "INFO",
+                    QUIETCOOL_LOG_LEVEL: process.env.QUIETCOOL_LOG_LEVEL || "WARNING",
                 },
             });
 
@@ -81,10 +121,11 @@ module.exports = function (RED) {
                 input: node.bridge.stderr,
             });
             stderrRl.on("line", (line) => {
-                node.warn(`Bridge: ${line}`);
+                node.queueBridgeStderr(line);
             });
 
             node.bridge.on("exit", (code, signal) => {
+                node.flushBridgeStderr(code !== 0);
                 node.warn(`Bridge exited: code=${code} signal=${signal}`);
                 node.bridge = null;
                 node.bridgeReady = false;
@@ -114,6 +155,7 @@ module.exports = function (RED) {
         node.stopBridge = function () {
             if (node.bridge) {
                 node.log("Stopping BLE bridge");
+                node.flushBridgeStderr();
                 node.bridge.kill("SIGTERM");
                 node.bridge = null;
                 node.bridgeReady = false;
@@ -170,6 +212,7 @@ module.exports = function (RED) {
         };
 
         node.on("close", function (done) {
+            node.flushBridgeStderr();
             node.stopBridge();
             done();
         });

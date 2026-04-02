@@ -49,11 +49,6 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 logger = logging.getLogger("quietcool-bridge")
-logging.basicConfig(
-    filename="/tmp/bridge-debug.log",
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s: %(message)s",
-)
 
 # BLE constants
 SERVICE_UUID = "000000ff-0000-1000-8000-00805f9b34fb"
@@ -678,6 +673,7 @@ def main():
         level=getattr(logging, log_level, logging.WARNING),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,  # Logs go to stderr, JSON protocol goes to stdout
+        force=True,
     )
 
     logger.info("QuietCool BLE Bridge starting...")
