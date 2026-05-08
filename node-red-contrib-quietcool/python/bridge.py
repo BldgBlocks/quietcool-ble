@@ -77,7 +77,8 @@ class FanBridge:
     def _on_disconnect(self, client: BleakClient):
         was_logged_in = self._logged_in
         self._logged_in = False
-        self.client = None
+        if self.client is client:
+            self.client = None
         # Only emit disconnect status if we were actually logged in (avoids spam during retries)
         if was_logged_in:
             emit_status(False, self.address, "disconnected")
@@ -146,33 +147,34 @@ class FanBridge:
                      logger.warning(f"Scan error: {scan_err}")
 
                 # Use discovered device object if available (skips internal re-scan logic in BleakClient)
-                self.client = BleakClient(
+                client = BleakClient(
                     device if device else self.address,
                     timeout=20.0,
                     disconnected_callback=self._on_disconnect,
                 )
+                self.client = client
                 
                 # Small delay to let BlueZ settle
                 await asyncio.sleep(1.0)
                 
                 logger.info(f"Initiating connection to {self.address}...")
                 try:
-                    await self.client.connect()
-                    logger.debug(f"Connect call returned. Connected: {self.client.is_connected}")
+                    await client.connect()
+                    logger.debug(f"Connect call returned. Connected: {client.is_connected}")
                 except Exception as conn_err:
                     logger.error(f"BleakClient.connect() raised exception: {conn_err}")
                     raise conn_err
 
-                if not self.is_connected:
+                if not client.is_connected:
                     raise ConnectionError("Failed to connect (disconnected immediately)")
 
-                await self.client.start_notify(CHAR_UUID, self._notification_handler)
+                await client.start_notify(CHAR_UUID, self._notification_handler)
 
                 # Send Login command
                 response = await self._send("Login", PhoneID=self.phone_id)
                 
                 if not response or response.get("Result") != "Success":
-                    await self.client.disconnect()
+                    await client.disconnect()
                     raise ConnectionError(
                         f"Login failed: {response}. Check PhoneID or pair the device."
                     )
@@ -434,17 +436,18 @@ class FanBridge:
         if self.is_connected:
             return {"already_connected": True}
 
-        self.client = BleakClient(
+        client = BleakClient(
             self.address,
             timeout=15.0,
             disconnected_callback=self._on_disconnect,
         )
-        await self.client.connect()
+        self.client = client
+        await client.connect()
 
-        if not self.client.is_connected:
+        if not client.is_connected:
             raise ConnectionError("Failed to connect")
 
-        await self.client.start_notify(CHAR_UUID, self._notification_handler)
+        await client.start_notify(CHAR_UUID, self._notification_handler)
         return {"connected": True, "ready_to_pair": True}
 
     async def raw(self, api: str, params: Dict) -> Dict:
