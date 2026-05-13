@@ -18,6 +18,8 @@ npm install /path/to/quietcool-ble/node-red-contrib-quietcool
 
 The `postinstall` script automatically creates a Python virtual environment and installs the `bleak` BLE library.
 
+The config node defaults to adapter `hci0`. Keep the adapter explicit when more than one BLE workload shares the same host.
+
 Restart Node-RED after installation:
 
 ```bash
@@ -37,6 +39,8 @@ No phone app or HCI snoop needed — pair directly from Node-RED:
 5. On the fan controller, hold the **Pair** button for ~5 seconds until the LED blinks
 6. Click **Pair with Fan** in the editor
 7. Save and deploy — you're done!
+
+Normal control and status traffic use the configured adapter and connect directly to the known BlueZ device path. Scanning is limited to the explicit **Scan** and pairing workflows.
 
 ### Alternative: Extract Phone ID from existing app pairing
 
@@ -125,6 +129,8 @@ Node-RED ← stdout JSON ← bridge.py ← BLE/bleak ← QuietCool Fan
 
 The bridge maintains a persistent BLE connection, avoiding the ~3 second reconnect overhead for each command. It spawns automatically when nodes are deployed and shuts down when they're removed.
 
+On Linux, the bridge is adapter-centric. Use the adapter field in the config node to pin QuietCool traffic to a specific controller such as `hci0` or `hci1`.
+
 ## Protocol
 
 QuietCool fans use plain JSON over BLE GATT. All communication goes through a single characteristic (`0000ff01`) on service `000000ff`. The protocol requires a `Login` with a `PhoneID` before any commands are accepted.
@@ -176,6 +182,7 @@ If the QuietCool BLE bridge fails to scan or connect, follow these steps:
      hciconfig -a
      bluetoothctl scan on
      ```
+  - If the wrong controller is being used, set the adapter explicitly in the config node.
 
 6. **Node-RED Integration**:
    - Restart Node-RED after resolving issues:

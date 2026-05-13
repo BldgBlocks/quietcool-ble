@@ -36,16 +36,15 @@ import asyncio
 import json
 import sys
 import os
-import signal
 import logging
 import secrets
-import subprocess
 from typing import Optional, Dict, Any
 
 # Add parent paths for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.device import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 logger = logging.getLogger("quietcool-bridge")
@@ -54,14 +53,29 @@ logger = logging.getLogger("quietcool-bridge")
 SERVICE_UUID = "000000ff-0000-1000-8000-00805f9b34fb"
 CHAR_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 DEFAULT_CHUNK_SIZE = 20
+DEFAULT_ADAPTER = "hci0"
+
+
+def normalize_adapter(adapter: Optional[str]) -> Optional[str]:
+    value = str(adapter or "").strip()
+    return value or None
+
+
+def bluez_device_path(adapter: Optional[str], address: str) -> Optional[str]:
+    normalized_adapter = normalize_adapter(adapter)
+    normalized_address = str(address or "").strip().upper()
+    if not normalized_adapter or not normalized_address:
+        return None
+    return f"/org/bluez/{normalized_adapter}/dev_{normalized_address.replace(':', '_')}"
 
 
 class FanBridge:
     """BLE bridge for a single QuietCool fan."""
 
-    def __init__(self, address: str, phone_id: str):
+    def __init__(self, address: str, phone_id: str, adapter: Optional[str] = DEFAULT_ADAPTER):
         self.address = address
         self.phone_id = phone_id
+        self.adapter = normalize_adapter(adapter) or DEFAULT_ADAPTER
         self.client: Optional[BleakClient] = None
         self._response_buffer = bytearray()
         self._response_event = asyncio.Event()
@@ -69,6 +83,19 @@ class FanBridge:
         self._logged_in = False
         self._presets_cache = None
         self._chunk_size = DEFAULT_CHUNK_SIZE
+
+    def _client_target(self) -> BLEDevice:
+        return BLEDevice(
+            self.address,
+            self.address,
+            {"path": bluez_device_path(self.adapter, self.address), "props": {}},
+        )
+
+    def _client_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {}
+        if self.adapter:
+            kwargs["adapter"] = self.adapter
+        return kwargs
 
     @property
     def is_connected(self) -> bool:
@@ -123,40 +150,22 @@ class FanBridge:
         if self.is_connected:
             return {"already_connected": True}
 
-        # Don't clean up immediately on the first try unless necessary; 
-        # but since we are here, we probably aren't connected.
-        # However, aggressive removal might be why we fail if we don't scan back.
-        
         last_error = None
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(f"Connect attempt {attempt}/{max_retries} to {self.address}")
-                
-                # Attempt to find the device more aggressively if needed
-                device = None
-                try:
-                    logger.debug("Scanning for device (detection mode)...")
-                    # Short scan to prime the cache
-                    device = await BleakScanner.find_device_by_address(self.address, timeout=10.0)
-                    
-                    if not device:
-                         logger.warning(f"Device {self.address} not found during scan.")
-                    else:
-                        logger.debug(f"Device found: {device}")
-                except Exception as scan_err:
-                     logger.warning(f"Scan error: {scan_err}")
 
-                # Use discovered device object if available (skips internal re-scan logic in BleakClient)
                 client = BleakClient(
-                    device if device else self.address,
+                    self._client_target(),
                     timeout=20.0,
                     disconnected_callback=self._on_disconnect,
+                    **self._client_kwargs(),
                 )
                 self.client = client
-                
+
                 # Small delay to let BlueZ settle
                 await asyncio.sleep(1.0)
-                
+
                 logger.info(f"Initiating connection to {self.address}...")
                 try:
                     await client.connect()
@@ -188,8 +197,6 @@ class FanBridge:
             except Exception as e:
                 last_error = e
                 logger.warning(f"Connect attempt {attempt} failed: {e}")
-                # cleanup stale connection usually involves 'remove' which nukes the cache
-                # so the next loop MUST scan.
                 await self._cleanup_stale_connection()
                 if attempt < max_retries:
                     await asyncio.sleep(2 * attempt)  # backoff: 2s, 4s
@@ -437,9 +444,10 @@ class FanBridge:
             return {"already_connected": True}
 
         client = BleakClient(
-            self.address,
+            self._client_target(),
             timeout=15.0,
             disconnected_callback=self._on_disconnect,
+            **self._client_kwargs(),
         )
         self.client = client
         await client.connect()
@@ -493,6 +501,7 @@ async def handle_command(line: str):
         if cmd == "connect":
             address = args.get("address", "")
             phone_id = args.get("phone_id", "")
+            adapter = normalize_adapter(args.get("adapter")) or DEFAULT_ADAPTER
             if not address or not phone_id:
                 emit(msg_id, False, error="address and phone_id are required")
                 return
@@ -502,7 +511,7 @@ async def handle_command(line: str):
                     await fan._cleanup_stale_connection()
                 except Exception:
                     pass
-            fan = FanBridge(address, phone_id)
+            fan = FanBridge(address, phone_id, adapter)
             result = await fan.connect()
             emit(msg_id, True, result)
 
@@ -590,12 +599,13 @@ async def handle_command(line: str):
             # Pairing flow: connect without login, then attempt pair
             address = args.get("address", "")
             phone_id = args.get("phone_id", "")
+            adapter = normalize_adapter(args.get("adapter")) or DEFAULT_ADAPTER
             if not address:
                 emit(msg_id, False, error="address is required")
                 return
             if not phone_id:
                 phone_id = secrets.token_hex(8)  # Auto-generate
-            fan = FanBridge(address, phone_id)
+            fan = FanBridge(address, phone_id, adapter)
             await fan.connect_for_pairing()
             result = await fan.pair()
             emit(msg_id, True, result)
@@ -603,7 +613,12 @@ async def handle_command(line: str):
         elif cmd == "scan":
             # Scan for QuietCool fans (bleak 2.x returns (device, adv_data) tuples)
             timeout = args.get("timeout", 8)
-            discovered = await BleakScanner.discover(timeout=timeout, return_adv=True)
+            adapter = normalize_adapter(args.get("adapter")) or DEFAULT_ADAPTER
+            discovered = await BleakScanner.discover(
+                timeout=timeout,
+                return_adv=True,
+                bluez={"adapter": adapter},
+            )
             fans = []
             for address, (device, adv_data) in discovered.items():
                 name = device.name or adv_data.local_name or ""
@@ -615,6 +630,7 @@ async def handle_command(line: str):
                         "address": device.address,
                         "name": name,
                         "rssi": adv_data.rssi,
+                        "adapter": adapter,
                     })
             emit(msg_id, True, {"fans": fans})
 

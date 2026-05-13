@@ -10,6 +10,10 @@
             <button type="button" id="quietcool-scan-btn" class="red-ui-button" title="Scan for fans"><i class="fa fa-search"></i> Scan</button>
         </div>
     </div>
+    <div class="form-row">
+        <label for="node-config-input-adapter"><i class="fa fa-rss"></i> Adapter</label>
+        <input type="text" id="node-config-input-adapter" placeholder="hci0">
+    </div>
     <div id="quietcool-scan-results" style="display:none; margin-bottom:10px;">
         <label>&nbsp;</label>
         <select id="quietcool-fan-select" style="width:70%;"></select>
@@ -53,6 +57,7 @@
     <p>The config node manages a Python bridge process that maintains the BLE
     connection to the fan. It starts automatically when nodes using this config
     are deployed, and stops when they are removed.</p>
+    <p>Set the adapter explicitly when this host runs multiple BLE workloads.</p>
 </script>
 
 <script type="text/javascript">
@@ -61,6 +66,7 @@
         defaults: {
             name: { value: "" },
             address: { value: "", required: true },
+            adapter: { value: "hci0", required: true },
             phoneId: { value: "", required: true },
             autoConnect: { value: true },
         },
@@ -71,8 +77,9 @@
             // Scan button
             $("#quietcool-scan-btn").on("click", function () {
                 var btn = $(this);
+                var adapter = $("#node-config-input-adapter").val() || "hci0";
                 btn.prop("disabled", true).find("i").removeClass("fa-search").addClass("fa-spinner fa-spin");
-                $.getJSON("quietcool/scan", function (data) {
+                $.getJSON("quietcool/scan", { adapter: adapter }, function (data) {
                     btn.prop("disabled", false).find("i").removeClass("fa-spinner fa-spin").addClass("fa-search");
                     if (data.fans && data.fans.length > 0) {
                         var select = $("#quietcool-fan-select").empty();
@@ -105,6 +112,7 @@
             // Pair button
             $("#quietcool-pair-btn").on("click", function () {
                 var address = $("#node-config-input-address").val();
+                var adapter = $("#node-config-input-adapter").val() || "hci0";
                 var phoneId = $("#node-config-input-phoneId").val();
                 if (!address || !phoneId) {
                     RED.notify("Fill in BLE Address and Phone ID first.", "warning");
@@ -119,7 +127,7 @@
                     url: "quietcool/pair",
                     type: "POST",
                     contentType: "application/json",
-                    data: JSON.stringify({ address: address, phoneId: phoneId }),
+                    data: JSON.stringify({ address: address, phoneId: phoneId, adapter: adapter }),
                     success: function (data) {
                         btn.prop("disabled", false);
                         if (data.paired) {

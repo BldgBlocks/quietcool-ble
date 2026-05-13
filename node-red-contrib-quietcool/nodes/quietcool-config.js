@@ -10,6 +10,11 @@ const readline = require("readline");
 const pythonDir = path.join(__dirname, "..", "python");
 const venvPython = path.join(pythonDir, ".venv", "bin", "python3");
 const bridgeScript = path.join(pythonDir, "bridge.py");
+const DEFAULT_ADAPTER = "hci0";
+
+function normalizeAdapter(value) {
+    return String(value || "").trim() || DEFAULT_ADAPTER;
+}
 
 module.exports = function (RED) {
     function QuietCoolConfigNode(config) {
@@ -18,6 +23,7 @@ module.exports = function (RED) {
 
         node.address = config.address;
         node.phoneId = config.phoneId;
+        node.adapter = normalizeAdapter(config.adapter);
         node.autoConnect = config.autoConnect !== false;
         node.bridge = null;
         node.bridgeReady = false;
@@ -69,7 +75,7 @@ module.exports = function (RED) {
         node.startBridge = function () {
             if (node.bridge) return;
 
-            node.log(`Starting BLE bridge for ${node.address}`);
+            node.log(`Starting BLE bridge for ${node.address} on ${node.adapter}`);
 
             node.bridge = spawn(venvPython, [bridgeScript], {
                 cwd: pythonDir,
@@ -100,6 +106,7 @@ module.exports = function (RED) {
                             node.sendBridgeCommand("connect", {
                                 address: node.address,
                                 phone_id: node.phoneId,
+                                adapter: node.adapter,
                             });
                         }
                         return;
@@ -229,6 +236,7 @@ module.exports = function (RED) {
         "/quietcool/scan",
         RED.auth.needsPermission("quietcool-config.write"),
         function (req, res) {
+            const adapter = normalizeAdapter(req.query.adapter);
             const proc = spawn(venvPython, [bridgeScript], {
                 cwd: pythonDir,
                 stdio: ["pipe", "pipe", "pipe"],
@@ -242,7 +250,7 @@ module.exports = function (RED) {
                     const msg = JSON.parse(line);
                     if (msg.type === "status" && msg.detail === "bridge_ready") {
                         proc.stdin.write(
-                            JSON.stringify({ id: "scan", cmd: "scan", args: { timeout: 8 } }) + "\n"
+                            JSON.stringify({ id: "scan", cmd: "scan", args: { timeout: 8, adapter } }) + "\n"
                         );
                     } else if (msg.id === "scan" && !responded) {
                         responded = true;
@@ -289,6 +297,7 @@ module.exports = function (RED) {
         function (req, res) {
             const address = req.body.address;
             const phoneId = req.body.phoneId;
+            const adapter = normalizeAdapter(req.body.adapter);
 
             if (!address || !phoneId) {
                 res.status(400).json({ error: "address and phoneId required" });
@@ -311,7 +320,7 @@ module.exports = function (RED) {
                             JSON.stringify({
                                 id: "pair",
                                 cmd: "pair",
-                                args: { address, phone_id: phoneId },
+                                args: { address, phone_id: phoneId, adapter },
                             }) + "\n"
                         );
                     } else if (msg.id === "pair" && !responded) {
