@@ -20,6 +20,32 @@ The `postinstall` script automatically creates a Python virtual environment and 
 
 The config node defaults to adapter `hci0`. Keep the adapter explicit when more than one BLE workload shares the same host.
 
+### Shared adapter coordination
+
+This package does not have a hard npm dependency on
+`@bldgblocks/node-red-contrib-bldgblocks-ble`. QuietCool remains usable by
+itself.
+
+When both packages are installed in the same Node-RED process, they cooperate
+through the `bldgblocks:ble-adapter-session` process event. The sensor BLE
+coordinator pauses shared discovery while QuietCool performs a command. The
+QuietCool Python bridge also acquires the same cross-process adapter lease under
+`XDG_RUNTIME_DIR`, so its Bleak operations cannot overlap sensor GATT writes or
+Bluepy OTA uploads.
+
+Deployment modes:
+
+| Installed packages | Behavior |
+|---|---|
+| QuietCool only | Works standalone through Bleak/BlueZ. |
+| Sensor BLE only | Its coordinator owns discovery and sensor transactions. |
+| Both packages | QuietCool commands, sensor config/calibration, and OTA serialize on the configured adapter. |
+
+For coordinated operation, configure both packages with the same explicit
+adapter, normally `hci0`, and restart Node-RED after installing or updating
+either package. Standalone scripts and manual `bluetoothctl` commands do not
+participate in this contract; stop Node-RED before using them.
+
 Restart Node-RED after installation:
 
 ```bash
@@ -129,7 +155,10 @@ Node-RED ← stdout JSON ← bridge.py ← BLE/bleak ← QuietCool Fan
 
 The bridge maintains a persistent BLE connection, avoiding the ~3 second reconnect overhead for each command. It spawns automatically when nodes are deployed and shuts down when they're removed.
 
-On Linux, the bridge is adapter-centric. Use the adapter field in the config node to pin QuietCool traffic to a specific controller such as `hci0` or `hci1`.
+On Linux, the bridge is adapter-centric. Use the adapter field in the config
+node to pin QuietCool traffic to a specific controller such as `hci0` or
+`hci1`. Every BLE command holds the shared adapter lease for its complete
+operation, including an automatic reconnect when needed.
 
 ## Protocol
 

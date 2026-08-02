@@ -33,11 +33,15 @@ Commands:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import sys
 import os
 import logging
 import secrets
+import shutil
+import tempfile
+import time
 from typing import Optional, Dict, Any
 
 # Add parent paths for imports
@@ -46,6 +50,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.exc import BleakDeviceNotFoundError
 
 logger = logging.getLogger("quietcool-bridge")
 
@@ -54,6 +59,8 @@ SERVICE_UUID = "000000ff-0000-1000-8000-00805f9b34fb"
 CHAR_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 DEFAULT_CHUNK_SIZE = 20
 DEFAULT_ADAPTER = "hci0"
+ADAPTER_LEASE_TIMEOUT_SEC = 30.0
+_held_adapter_leases: Dict[str, int] = {}
 
 
 def normalize_adapter(adapter: Optional[str]) -> Optional[str]:
@@ -67,6 +74,53 @@ def bluez_device_path(adapter: Optional[str], address: str) -> Optional[str]:
     if not normalized_adapter or not normalized_address:
         return None
     return f"/org/bluez/{normalized_adapter}/dev_{normalized_address.replace(':', '_')}"
+
+
+def adapter_lease_path(adapter: str) -> str:
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or os.path.join(
+        tempfile.gettempdir(), f"bldgblocks-ble-{os.getuid()}"
+    )
+    os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
+    return os.path.join(runtime_dir, f"bldgblocks-ble-{adapter}.lease")
+
+
+@asynccontextmanager
+async def adapter_lease(adapter: str, owner: str, timeout: float = ADAPTER_LEASE_TIMEOUT_SEC):
+    if _held_adapter_leases.get(adapter, 0) > 0:
+        _held_adapter_leases[adapter] += 1
+        try:
+            yield
+        finally:
+            _held_adapter_leases[adapter] -= 1
+        return
+
+    lease_dir = adapter_lease_path(adapter)
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        try:
+            os.mkdir(lease_dir, mode=0o700)
+            with open(os.path.join(lease_dir, "owner"), "w", encoding="utf-8") as owner_file:
+                json.dump({"pid": os.getpid(), "owner": owner, "acquiredAt": time.time()}, owner_file)
+            break
+        except FileExistsError:
+            try:
+                with open(os.path.join(lease_dir, "owner"), encoding="utf-8") as owner_file:
+                    metadata = json.load(owner_file)
+                os.kill(int(metadata.get("pid", 0)), 0)
+            except (FileNotFoundError, ProcessLookupError, ValueError, json.JSONDecodeError):
+                shutil.rmtree(lease_dir, ignore_errors=True)
+                continue
+            await asyncio.sleep(0.1)
+    else:
+        raise TimeoutError(f"BLE adapter lease timeout for {adapter}")
+
+    try:
+        _held_adapter_leases[adapter] = 1
+        yield
+    finally:
+        _held_adapter_leases.pop(adapter, None)
+        shutil.rmtree(lease_dir, ignore_errors=True)
 
 
 class FanBridge:
@@ -90,6 +144,16 @@ class FanBridge:
             self.address,
             {"path": bluez_device_path(self.adapter, self.address), "props": {}},
         )
+
+    async def _discover_client_target(self) -> BLEDevice:
+        device = await BleakScanner.find_device_by_address(
+            self.address,
+            timeout=10.0,
+            bluez={"adapter": self.adapter},
+        )
+        if device is None:
+            raise ConnectionError(f"Device {self.address} was not found during discovery")
+        return device
 
     def _client_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
@@ -151,42 +215,39 @@ class FanBridge:
             return {"already_connected": True}
 
         last_error = None
+        discover_on_retry = False
         for attempt in range(1, max_retries + 1):
             try:
-                logger.info(f"Connect attempt {attempt}/{max_retries} to {self.address}")
+                async with adapter_lease(self.adapter, f"quietcool-connect:{self.address}"):
+                    logger.info(f"Connect attempt {attempt}/{max_retries} to {self.address}")
 
-                client = BleakClient(
-                    self._client_target(),
-                    timeout=20.0,
-                    disconnected_callback=self._on_disconnect,
-                    **self._client_kwargs(),
-                )
-                self.client = client
-
-                # Small delay to let BlueZ settle
-                await asyncio.sleep(1.0)
-
-                logger.info(f"Initiating connection to {self.address}...")
-                try:
-                    await client.connect()
-                    logger.debug(f"Connect call returned. Connected: {client.is_connected}")
-                except Exception as conn_err:
-                    logger.error(f"BleakClient.connect() raised exception: {conn_err}")
-                    raise conn_err
-
-                if not client.is_connected:
-                    raise ConnectionError("Failed to connect (disconnected immediately)")
-
-                await client.start_notify(CHAR_UUID, self._notification_handler)
-
-                # Send Login command
-                response = await self._send("Login", PhoneID=self.phone_id)
-                
-                if not response or response.get("Result") != "Success":
-                    await client.disconnect()
-                    raise ConnectionError(
-                        f"Login failed: {response}. Check PhoneID or pair the device."
+                    target = (
+                        await self._discover_client_target()
+                        if discover_on_retry
+                        else self._client_target()
                     )
+
+                    client = BleakClient(
+                        target,
+                        timeout=20.0,
+                        disconnected_callback=self._on_disconnect,
+                        **self._client_kwargs(),
+                    )
+                    self.client = client
+                    await asyncio.sleep(1.0)
+                    await client.connect()
+
+                    if not client.is_connected:
+                        raise ConnectionError("Failed to connect (disconnected immediately)")
+
+                    await client.start_notify(CHAR_UUID, self._notification_handler)
+                    response = await self._send("Login", PhoneID=self.phone_id)
+
+                    if not response or response.get("Result") != "Success":
+                        await client.disconnect()
+                        raise ConnectionError(
+                            f"Login failed: {response}. Check PhoneID or pair the device."
+                        )
 
                 self._logged_in = True
                 emit_status(True, self.address, "connected")
@@ -197,6 +258,8 @@ class FanBridge:
             except Exception as e:
                 last_error = e
                 logger.warning(f"Connect attempt {attempt} failed: {e}")
+                if isinstance(e, BleakDeviceNotFoundError):
+                    discover_on_retry = True
                 await self._cleanup_stale_connection()
                 if attempt < max_retries:
                     await asyncio.sleep(2 * attempt)  # backoff: 2s, 4s
@@ -233,8 +296,8 @@ class FanBridge:
         try:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
             return self._response_json
-        except asyncio.TimeoutError:
-            return None
+        except asyncio.TimeoutError as error:
+            raise TimeoutError(f"{api} response timed out after {timeout:g}s") from error
 
     async def reconnect_and_send(self, api: str, timeout: float = 5.0, **kwargs):
         """Send command with auto-reconnect on BLE drop."""
@@ -443,19 +506,20 @@ class FanBridge:
         if self.is_connected:
             return {"already_connected": True}
 
-        client = BleakClient(
-            self._client_target(),
-            timeout=15.0,
-            disconnected_callback=self._on_disconnect,
-            **self._client_kwargs(),
-        )
-        self.client = client
-        await client.connect()
+        async with adapter_lease(self.adapter, f"quietcool-pair:{self.address}"):
+            client = BleakClient(
+                self._client_target(),
+                timeout=15.0,
+                disconnected_callback=self._on_disconnect,
+                **self._client_kwargs(),
+            )
+            self.client = client
+            await client.connect()
 
-        if not client.is_connected:
-            raise ConnectionError("Failed to connect")
+            if not client.is_connected:
+                raise ConnectionError("Failed to connect")
 
-        await client.start_notify(CHAR_UUID, self._notification_handler)
+            await client.start_notify(CHAR_UUID, self._notification_handler)
         return {"connected": True, "ready_to_pair": True}
 
     async def raw(self, api: str, params: Dict) -> Dict:
@@ -614,11 +678,12 @@ async def handle_command(line: str):
             # Scan for QuietCool fans (bleak 2.x returns (device, adv_data) tuples)
             timeout = args.get("timeout", 8)
             adapter = normalize_adapter(args.get("adapter")) or DEFAULT_ADAPTER
-            discovered = await BleakScanner.discover(
-                timeout=timeout,
-                return_adv=True,
-                bluez={"adapter": adapter},
-            )
+            async with adapter_lease(adapter, "quietcool-scan"):
+                discovered = await BleakScanner.discover(
+                    timeout=timeout,
+                    return_adv=True,
+                    bluez={"adapter": adapter},
+                )
             fans = []
             for address, (device, adv_data) in discovered.items():
                 name = device.name or adv_data.local_name or ""
@@ -680,7 +745,21 @@ async def stdin_reader():
         if not line:
             break  # EOF - Node-RED process ended
         try:
-            await handle_command(line.decode("utf-8").strip())
+            command_line = line.decode("utf-8").strip()
+            command = json.loads(command_line)
+            cmd = command.get("cmd", "")
+            args = command.get("args", {})
+            ble_commands = {
+                "connect", "disconnect", "get_status", "get_state", "get_info",
+                "get_version", "get_params", "get_presets", "get_remain", "set_mode",
+                "set_speed", "set_timer", "set_preset", "set_thresholds", "pair", "scan", "raw"
+            }
+            if cmd in ble_commands:
+                adapter = normalize_adapter(args.get("adapter")) or (fan.adapter if fan else DEFAULT_ADAPTER)
+                async with adapter_lease(adapter, f"quietcool-command:{cmd}"):
+                    await handle_command(command_line)
+            else:
+                await handle_command(command_line)
         except Exception as e:
             logger.exception(f"Unhandled error: {e}")
             emit("?", False, error=f"Internal error: {e}")

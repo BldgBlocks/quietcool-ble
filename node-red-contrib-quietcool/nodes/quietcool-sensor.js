@@ -5,6 +5,7 @@
  *   "get_state"  → msg.state  (mode, range, temperature, humidity)
  *   "get_status" → msg.state + msg.info + msg.version + msg.params
  *                   + msg.presets + msg.timer (if in Timer mode)
+ * Successful queries also set msg.lastSuccessfulConnection (ISO 8601).
  *
  * No polling — wire an inject node to trigger reads as needed.
  */
@@ -16,6 +17,7 @@ module.exports = function (RED) {
 
         node.configNodeId = config.fan;
         node.query = config.query || "get_state";
+        node.lastSuccessfulConnection = null;
 
         const fanConfig = RED.nodes.getNode(node.configNodeId);
         if (!fanConfig) {
@@ -24,10 +26,16 @@ module.exports = function (RED) {
         }
 
         node.updateNodeStatus = function (connected) {
+            const text =
+                connected && node.lastSuccessfulConnection
+                    ? `connected ${new Date(node.lastSuccessfulConnection).toLocaleString()}`
+                    : connected
+                      ? "connected"
+                      : "disconnected";
             node.status(
                 connected
-                    ? { fill: "green", shape: "dot", text: "connected" }
-                    : { fill: "red", shape: "ring", text: "disconnected" }
+                    ? { fill: "green", shape: "dot", text }
+                    : { fill: "red", shape: "ring", text }
             );
         };
 
@@ -54,6 +62,8 @@ module.exports = function (RED) {
             fanConfig.sendBridgeCommand(query, {}, function (response) {
                 if (response.ok) {
                     const data = response.data || {};
+                    node.lastSuccessfulConnection = new Date().toISOString();
+                    msg.lastSuccessfulConnection = node.lastSuccessfulConnection;
 
                     if (query === "get_state") {
                         msg.topic = "state";

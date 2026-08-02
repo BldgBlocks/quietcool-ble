@@ -11,9 +11,19 @@ const pythonDir = path.join(__dirname, "..", "python");
 const venvPython = path.join(pythonDir, ".venv", "bin", "python3");
 const bridgeScript = path.join(pythonDir, "bridge.py");
 const DEFAULT_ADAPTER = "hci0";
+const ADAPTER_SESSION_EVENT = "bldgblocks:ble-adapter-session";
 
 function normalizeAdapter(value) {
     return String(value || "").trim() || DEFAULT_ADAPTER;
+}
+
+function emitAdapterSession(state, adapter, owner, ready) {
+    return process.emit(ADAPTER_SESSION_EVENT, {
+        state,
+        adapter: normalizeAdapter(adapter),
+        owner,
+        ready,
+    });
 }
 
 module.exports = function (RED) {
@@ -180,19 +190,61 @@ module.exports = function (RED) {
 
             const id = `msg_${++node.msgCounter}`;
             const msg = JSON.stringify({ id, cmd, args: args || {} }) + "\n";
+            const adapterCommands = new Set([
+                "connect", "disconnect", "get_status", "get_state", "get_info",
+                "get_version", "get_params", "get_presets", "get_remain", "set_mode",
+                "set_speed", "set_timer", "set_preset", "set_thresholds", "pair", "scan", "raw",
+            ]);
+            const ownsAdapterSession = adapterCommands.has(cmd);
+            const sessionOwner = `quietcool:${node.id}:${id}`;
+            let sessionFinished = false;
+            const finishSession = () => {
+                if (!ownsAdapterSession || sessionFinished) return;
+                sessionFinished = true;
+                emitAdapterSession("finished", node.adapter, sessionOwner);
+            };
 
-            if (callback) {
-                node.pendingCallbacks[id] = callback;
+            if (callback || ownsAdapterSession) {
+                node.pendingCallbacks[id] = (response) => {
+                    finishSession();
+                    if (callback) callback(response);
+                };
                 // Timeout after 90s (BLE operations including scan/reconnect can be slow)
                 setTimeout(() => {
                     if (node.pendingCallbacks[id]) {
                         delete node.pendingCallbacks[id];
-                        callback({ ok: false, error: "Command timeout" });
+                        finishSession();
+                        if (callback) callback({ ok: false, error: "Command timeout" });
                     }
                 }, 90000);
             }
 
-            node.bridge.stdin.write(msg);
+            if (ownsAdapterSession) {
+                let commandSent = false;
+                let coordinatorFallback = null;
+                const sendCommand = (error) => {
+                    if (commandSent) return;
+                    commandSent = true;
+                    if (coordinatorFallback) clearTimeout(coordinatorFallback);
+                    if (error) {
+                        node.warn(`BLE coordinator pause failed: ${error.message || error}`);
+                    }
+                    if (node.bridge && node.bridge.stdin.writable) node.bridge.stdin.write(msg);
+                };
+                const coordinatorPresent = emitAdapterSession(
+                    "starting",
+                    node.adapter,
+                    sessionOwner,
+                    sendCommand
+                );
+                if (!coordinatorPresent) {
+                    sendCommand();
+                } else {
+                    coordinatorFallback = setTimeout(sendCommand, 5000);
+                }
+            } else {
+                node.bridge.stdin.write(msg);
+            }
         };
 
         node.registerUser = function (userNode) {
