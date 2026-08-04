@@ -6,6 +6,54 @@ from bleak.exc import BleakDeviceNotFoundError
 
 
 class FanBridgeConnectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_discovers_device_after_transient_disconnect(self):
+        targets = []
+        discovered_device = object()
+
+        class FakeClient:
+            def __init__(self, target, **kwargs):
+                self.is_connected = False
+                targets.append(target)
+
+            async def connect(self):
+                self.is_connected = True
+
+            async def start_notify(self, characteristic, callback):
+                if len(targets) == 1:
+                    self.is_connected = False
+
+            async def disconnect(self):
+                self.is_connected = False
+
+        fan = bridge.FanBridge("10:06:1C:42:52:F6", "phone-id", "hci0")
+
+        async def send(api, **kwargs):
+            if not fan.client or not fan.client.is_connected:
+                raise ConnectionError("Not connected")
+            return {"Result": "Success"}
+
+        fan._send = send
+
+        with (
+            patch.object(bridge, "BleakClient", FakeClient),
+            patch.object(
+                bridge.BleakScanner,
+                "find_device_by_address",
+                AsyncMock(return_value=discovered_device),
+            ) as find_device,
+            patch.object(bridge.asyncio, "sleep", AsyncMock()),
+            patch.object(bridge, "emit_status"),
+        ):
+            result = await fan.connect(max_retries=2)
+
+        self.assertTrue(result["connected"])
+        self.assertIs(targets[1], discovered_device)
+        find_device.assert_awaited_once_with(
+            fan.address,
+            timeout=10.0,
+            bluez={"adapter": "hci0"},
+        )
+
     async def test_discovers_device_after_bluez_path_is_evicted(self):
         targets = []
         discovered_device = object()

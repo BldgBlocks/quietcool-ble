@@ -50,7 +50,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
-from bleak.exc import BleakDeviceNotFoundError
 
 logger = logging.getLogger("quietcool-bridge")
 
@@ -258,8 +257,7 @@ class FanBridge:
             except Exception as e:
                 last_error = e
                 logger.warning(f"Connect attempt {attempt} failed: {e}")
-                if isinstance(e, BleakDeviceNotFoundError):
-                    discover_on_retry = True
+                discover_on_retry = True
                 await self._cleanup_stale_connection()
                 if attempt < max_retries:
                     await asyncio.sleep(2 * attempt)  # backoff: 2s, 4s
