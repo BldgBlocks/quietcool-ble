@@ -1,8 +1,32 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import bridge
 from bleak.exc import BleakDeviceNotFoundError
+
+
+class AdapterLeasePathTests(unittest.TestCase):
+    def test_falls_back_when_xdg_runtime_directory_is_inaccessible(self):
+        with (
+            patch.dict(bridge.os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False),
+            patch.object(bridge.tempfile, "gettempdir", return_value="/tmp"),
+            patch.object(bridge.os, "getuid", return_value=1001),
+            patch.object(
+                bridge.os,
+                "makedirs",
+                side_effect=[PermissionError("denied"), None],
+            ) as makedirs,
+        ):
+            lease_path = bridge.adapter_lease_path("hci0")
+
+        self.assertEqual(lease_path, "/tmp/bldgblocks-ble-1001/bldgblocks-ble-hci0.lease")
+        self.assertEqual(
+            makedirs.call_args_list,
+            [
+                call("/run/user/1000", mode=0o700, exist_ok=True),
+                call("/tmp/bldgblocks-ble-1001", mode=0o700, exist_ok=True),
+            ],
+        )
 
 
 class FanBridgeConnectTests(unittest.IsolatedAsyncioTestCase):

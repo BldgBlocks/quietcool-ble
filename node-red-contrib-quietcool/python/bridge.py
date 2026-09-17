@@ -76,10 +76,15 @@ def bluez_device_path(adapter: Optional[str], address: str) -> Optional[str]:
 
 
 def adapter_lease_path(adapter: str) -> str:
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or os.path.join(
-        tempfile.gettempdir(), f"bldgblocks-ble-{os.getuid()}"
-    )
-    os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
+    fallback_dir = os.path.join(tempfile.gettempdir(), f"bldgblocks-ble-{os.getuid()}")
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or fallback_dir
+    try:
+        os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
+    except PermissionError:
+        if runtime_dir == fallback_dir:
+            raise
+        os.makedirs(fallback_dir, mode=0o700, exist_ok=True)
+        runtime_dir = fallback_dir
     return os.path.join(runtime_dir, f"bldgblocks-ble-{adapter}.lease")
 
 
